@@ -20,11 +20,15 @@ import {
 import { Badge } from '../ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import StudentQRCode from './StudentQRCode';
-import { type Student as StudentType } from '../../services/studentService';
-import { type Class } from '../../services/classService';
+import { studentService } from '../../services/studentService';
+import { classService } from '../../services/classService';
+import type { Student as StudentType, Class } from '../../types';
 import { supabase } from '../../lib/supabase';
 import { useStudents } from '../../hooks/useStudents';
 import { useClasses } from '../../hooks/useClasses';
+import StudentCard from './StudentCard';
+import StudentFilters from './StudentFilters';
+import ViewToggle from './ViewToggle';
 
 // Extended Student interface for UI display
 interface Student extends StudentType {
@@ -57,7 +61,27 @@ export default function Students() {
   const [isAttendanceDialogOpen, setIsAttendanceDialogOpen] = useState(false);
   const [isQRDialogOpen, setIsQRDialogOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 5;
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>('cards');
+
+  // Auto-switch to cards view on mobile
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth < 768) {
+        setViewMode('cards');
+      }
+    };
+
+    // Initial check
+    handleResize();
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+  const [filters, setFilters] = useState({
+    classId: 'all',
+    paymentStatus: 'all'
+  });
+  const itemsPerPage = viewMode === 'cards' ? 6 : 5; // More items for card view
 
   const [formData, setFormData] = useState({
     name: '',
@@ -73,18 +97,41 @@ export default function Students() {
 
   // Data loading is now handled by React Query hooks
 
-  const filteredStudents = students.filter(student =>
-    student.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (student.email?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
-    student.phone.includes(searchTerm) ||
-    (student.guardian_name || '').toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredStudents = students.filter(student => {
+    // Search filter
+    const matchesSearch = student.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (student.email?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+      student.phone.includes(searchTerm) ||
+      (student.guardian_name || '').toLowerCase().includes(searchTerm.toLowerCase());
+
+    // Class filter
+    const matchesClass = filters.classId === 'all' || student.class_id === filters.classId;
+
+    // Payment status filter
+    const matchesPayment = filters.paymentStatus === 'all' || student.payment_status === filters.paymentStatus;
+
+    // Status filter - Exclude expelled from main list
+    const isNotExpelled = student.status !== 'expelled';
+
+    return matchesSearch && matchesClass && matchesPayment && isNotExpelled;
+  });
 
   const totalPages = Math.ceil(filteredStudents.length / itemsPerPage);
   const currentStudents = filteredStudents.slice(
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
   );
+
+  // Reset to page 1 when filters change
+  const handleFilterChange = (newFilters: { classId: string; paymentStatus: string }) => {
+    setFilters(newFilters);
+    setCurrentPage(1);
+  };
+
+  const handleClearFilters = () => {
+    setFilters({ classId: 'all', paymentStatus: 'all' });
+    setCurrentPage(1);
+  };
 
   const handleAddStudent = async () => {
     if (!formData.name || !formData.phone || !formData.guardian_name || !formData.guardian_phone || !formData.class_id) {
@@ -252,6 +299,7 @@ export default function Students() {
         </Card>
       </div>
 
+      {/* Search and View Toggle */}
       <div className="flex items-center gap-4 bg-white p-4 rounded-lg border shadow-sm">
         <div className="relative flex-1">
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -262,116 +310,185 @@ export default function Students() {
             className="pr-10"
           />
         </div>
+        <ViewToggle view={viewMode} onViewChange={setViewMode} />
       </div>
 
-      <div className="bg-white rounded-lg border shadow-sm">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="text-right">اسم الطالب</TableHead>
-              <TableHead className="text-right">الفصل</TableHead>
-              <TableHead className="text-right">ولي الأمر</TableHead>
-              <TableHead className="text-right">رقم الهاتف</TableHead>
-              <TableHead className="text-right">حالة الرسوم</TableHead>
-              <TableHead className="text-right">الحالة</TableHead>
-              <TableHead className="text-right">الإجراءات</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
+      {/* Filters */}
+      <StudentFilters
+        classes={availableClasses}
+        filters={filters}
+        onFilterChange={handleFilterChange}
+        onClearFilters={handleClearFilters}
+      />
+
+      {/* Content - Table or Cards View */}
+      {viewMode === 'table' ? (
+        <div className="bg-white rounded-lg border shadow-sm overflow-hidden">
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-right">اسم الطالب</TableHead>
+                  <TableHead className="text-right">الفصل</TableHead>
+                  <TableHead className="text-right">ولي الأمر</TableHead>
+                  <TableHead className="text-right">رقم الهاتف</TableHead>
+                  <TableHead className="text-right">حالة الرسوم</TableHead>
+                  <TableHead className="text-right">الحالة</TableHead>
+                  <TableHead className="text-right">الإجراءات</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {currentStudents.length > 0 ? (
+                  currentStudents.map((student) => (
+                    <TableRow key={student.id}>
+                      <TableCell className="font-medium">{student.name}</TableCell>
+                      <TableCell>
+                        {student.classes ? (
+                          <div className="flex flex-col">
+                            <span className="font-medium">{student.classes.name}</span>
+                            <span className="text-xs text-gray-500">{student.classes.grade_level}</span>
+                          </div>
+                        ) : (
+                          <span className="text-gray-400">غير معين</span>
+                        )}
+                      </TableCell>
+                      <TableCell>{student.guardian_name}</TableCell>
+                      <TableCell dir="ltr" className="text-right">{student.phone}</TableCell>
+                      <TableCell>
+                        <Badge variant={student.payment_status === 'regular' ? 'default' : 'secondary'}>
+                          {student.payment_status === 'regular' ? 'منتظم' : 'معفى'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge className={student.status === 'suspended' ? 'bg-yellow-500 hover:bg-yellow-600' : student.status === 'expelled' ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'}>
+                          {student.status === 'suspended' ? 'موقوف' : student.status === 'expelled' ? 'مفصول' : 'نشط'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <Button variant="ghost" size="icon" onClick={() => navigate(`/dashboard/students/${student.slug || student.id}`)}>
+                            <Eye className="h-4 w-4 text-orange-500" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => openEditDialog(student)}>
+                            <Edit className="h-4 w-4 text-blue-500" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => openAssignDialog(student)}>
+                            <UserPlus className="h-4 w-4 text-green-500" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => { setSelectedStudent(student); setIsQRDialogOpen(true); }}>
+                            <QrCode className="h-4 w-4 text-purple-500" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => handleDeleteStudent(student.id || '')}>
+                            <Trash2 className="h-4 w-4 text-red-500" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center py-8 text-gray-500">
+                      لا توجد نتائج
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="p-4 border-t">
+                <Pagination>
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                        className={currentPage === 1 ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
+                      />
+                    </PaginationItem>
+                    {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+                      <PaginationItem key={page}>
+                        <PaginationLink
+                          isActive={currentPage === page}
+                          onClick={() => setCurrentPage(page)}
+                          className="cursor-pointer"
+                        >
+                          {page}
+                        </PaginationLink>
+                      </PaginationItem>
+                    ))}
+                    <PaginationItem>
+                      <PaginationNext
+                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                        className={currentPage === totalPages ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        /* Cards View */
+        <div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {currentStudents.length > 0 ? (
               currentStudents.map((student) => (
-                <TableRow key={student.id}>
-                  <TableCell className="font-medium">{student.name}</TableCell>
-                  <TableCell>
-                    {student.classes ? (
-                      <div className="flex flex-col">
-                        <span className="font-medium">{student.classes.name}</span>
-                        <span className="text-xs text-gray-500">{student.classes.grade_level}</span>
-                      </div>
-                    ) : (
-                      <span className="text-gray-400">غير معين</span>
-                    )}
-                  </TableCell>
-                  <TableCell>{student.guardian_name}</TableCell>
-                  <TableCell dir="ltr" className="text-right">{student.phone}</TableCell>
-                  <TableCell>
-                    <Badge variant={student.payment_status === 'regular' ? 'default' : 'secondary'}>
-                      {student.payment_status === 'regular' ? 'منتظم' : 'معفى'}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Badge className={student.status === 'suspended' ? 'bg-yellow-500 hover:bg-yellow-600' : student.status === 'expelled' ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'}>
-                      {student.status === 'suspended' ? 'موقوف' : student.status === 'expelled' ? 'مفصول' : 'نشط'}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      <Button variant="ghost" size="icon" onClick={() => navigate(`/dashboard/students/${student.id}`)}>
-                        <Eye className="h-4 w-4 text-orange-500" />
-                      </Button>
-                      <Button variant="ghost" size="icon" onClick={() => openEditDialog(student)}>
-                        <Edit className="h-4 w-4 text-blue-500" />
-                      </Button>
-                      <Button variant="ghost" size="icon" onClick={() => openAssignDialog(student)}>
-                        <UserPlus className="h-4 w-4 text-green-500" />
-                      </Button>
-                      <Button variant="ghost" size="icon" onClick={() => { setSelectedStudent(student); setIsQRDialogOpen(true); }}>
-                        <QrCode className="h-4 w-4 text-purple-500" />
-                      </Button>
-                      <Button variant="ghost" size="icon" onClick={() => handleDeleteStudent(student.id || '')}>
-                        <Trash2 className="h-4 w-4 text-red-500" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
+                <StudentCard
+                  key={student.id}
+                  student={student}
+                  onView={(s) => navigate(`/dashboard/students/${s.slug || s.id}`)}
+                  onEdit={openEditDialog}
+                  onDelete={handleDeleteStudent}
+                  onStatusUpdate={(id, status) => updateStudent({ id, data: { status } })}
+                  onShowQR={(s) => { setSelectedStudent(s); setIsQRDialogOpen(true); }}
+                />
               ))
             ) : (
-              <TableRow>
-                <TableCell colSpan={6} className="text-center py-8 text-gray-500">
-                  لا توجد نتائج
-                </TableCell>
-              </TableRow>
+              <div className="col-span-full text-center py-12">
+                <p className="text-gray-500">لا توجد نتائج</p>
+              </div>
             )}
-          </TableBody>
-        </Table>
-
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="p-4 border-t">
-            <Pagination>
-              <PaginationContent>
-                <PaginationItem>
-                  <PaginationPrevious
-                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                    className={currentPage === 1 ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
-                  />
-                </PaginationItem>
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-                  <PaginationItem key={page}>
-                    <PaginationLink
-                      isActive={currentPage === page}
-                      onClick={() => setCurrentPage(page)}
-                      className="cursor-pointer"
-                    >
-                      {page}
-                    </PaginationLink>
-                  </PaginationItem>
-                ))}
-                <PaginationItem>
-                  <PaginationNext
-                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                    className={currentPage === totalPages ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
-                  />
-                </PaginationItem>
-              </PaginationContent>
-            </Pagination>
           </div>
-        )}
-      </div>
 
-      {/* Add Student Dialog */}
+          {/* Pagination for Cards */}
+          {totalPages > 1 && (
+            <div className="mt-6 flex justify-center">
+              <Pagination>
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationPrevious
+                      onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                      className={currentPage === 1 ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
+                    />
+                  </PaginationItem>
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+                    <PaginationItem key={page}>
+                      <PaginationLink
+                        onClick={() => setCurrentPage(page)}
+                        isActive={currentPage === page}
+                        className="cursor-pointer"
+                      >
+                        {page}
+                      </PaginationLink>
+                    </PaginationItem>
+                  ))}
+                  <PaginationItem>
+                    <PaginationNext
+                      onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                      className={currentPage === totalPages ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
+                    />
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
+            </div>
+          )}
+        </div>
+      )}
+
       <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-        <DialogContent className="sm:max-w-[500px]" onInteractOutside={(e) => e.preventDefault()}>
+        <DialogContent onInteractOutside={(e) => e.preventDefault()}>
           <DialogHeader>
             <DialogTitle>إضافة طالب جديد</DialogTitle>
             <DialogDescription>
@@ -427,7 +544,7 @@ export default function Students() {
                   id="guardianPhone"
                   value={formData.guardian_phone}
                   onChange={(e) => setFormData({ ...formData, guardian_phone: e.target.value })}
-                  placeholder="05xxxxxxxx"
+                  placeholder="01xxxxxxxx"
                   dir="ltr"
                 />
               </div>
@@ -443,8 +560,8 @@ export default function Students() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="regular">منتظم</SelectItem>
-                    <SelectItem value="exempt">معفى</SelectItem>
+                    <SelectItem value="regular">منتظم في الدفع</SelectItem>
+                    <SelectItem value="exempt">معفى من الدفع</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -477,9 +594,8 @@ export default function Students() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit Student Dialog */}
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-        <DialogContent className="sm:max-w-[500px]" onInteractOutside={(e) => e.preventDefault()}>
+        <DialogContent className="sm:max-w-[30%] w-full" onInteractOutside={(e) => e.preventDefault()}>
           <DialogHeader>
             <DialogTitle>تعديل بيانات الطالب</DialogTitle>
             <DialogDescription>

@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '../ui/card';
+import { Button } from '../ui/button';
+import { Input } from '../ui/input';
+import { Label } from '../ui/label';
+import { Badge } from '../ui/badge';
 import {
     School,
     Settings as SettingsIcon,
@@ -18,9 +18,9 @@ import {
     AlertCircle,
     ShieldOff
 } from 'lucide-react';
-import { useSettings } from '@/hooks/useSettings';
-import { useGrades } from '@/hooks/useGrades';
-import { useClasses } from '@/hooks/useClasses';
+import { useSettings } from '../../hooks/useSettings';
+import { useGrades } from '../../hooks/useGrades';
+import { useClasses } from '../../hooks/useClasses';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { ar } from 'date-fns/locale';

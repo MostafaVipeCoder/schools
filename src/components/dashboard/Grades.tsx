@@ -9,9 +9,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui
 import { Search, Plus, Edit, Trash2, School } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '../ui/badge';
-import { gradeService, type Grade as GradeType } from '../../services/gradeService';
+import { gradeService } from '../../services/gradeService';
+import type { Grade as GradeType } from '../../types';
 import { useGrades } from '../../hooks/useGrades';
-import { useSettings } from '@/hooks/useSettings';
+import { useSettings } from '../../hooks/useSettings';
 
 // Extended Grade interface for UI
 interface Grade extends GradeType {
@@ -46,6 +47,17 @@ export default function Grades() {
       return;
     }
 
+    // Check for duplicates
+    const isDuplicate = grades.some(
+      (g) => g.name.trim().toLowerCase() === formData.name.trim().toLowerCase() &&
+        g.stage === formData.stage
+    );
+
+    if (isDuplicate) {
+      toast.error('هذه المرحلة مسجلة بالفعل في هذا النظام');
+      return;
+    }
+
     try {
       // Optimistic update happens immediately in the hook
       await addGrade({
@@ -64,6 +76,18 @@ export default function Grades() {
   const handleEditGrade = async () => {
     if (!selectedGrade || !selectedGrade.id) return;
 
+    // Check for duplicates (excluding the current grade being edited)
+    const isDuplicate = grades.some(
+      (g) => g.id !== selectedGrade.id &&
+        g.name.trim().toLowerCase() === formData.name.trim().toLowerCase() &&
+        g.stage === formData.stage
+    );
+
+    if (isDuplicate) {
+      toast.error('هذه المرحلة مسجلة بالفعل في هذا النظام');
+      return;
+    }
+
     try {
       await updateGrade({
         id: selectedGrade.id,
@@ -81,14 +105,20 @@ export default function Grades() {
   };
 
   const handleDeleteGrade = async (id: string) => {
-    if (!window.confirm('هل أنت متأكد من حذف هذه المرحلة؟')) return;
-
-    // Check if grade has classes first (client-side check for UX, backend usually enforces FK constraint)
     const grade = grades.find(g => g.id === id);
+
+    // Check if grade has classes or students
     if (grade && (grade.classCount || 0) > 0) {
-      toast.error('لا يمكن حذف مرحلة مرتبطة بفصول دراسية');
+      toast.error('لا يمكن حذف مرحلة مرتبطة بفصول دراسية. قم بحذف الفصول أولاً.');
       return;
     }
+
+    if (grade && (grade.studentCount || 0) > 0) {
+      toast.error('لا يمكن حذف مرحلة مرتبطة بطلاب مسجلين. قم بنقل أو حذف الطلاب أولاً.');
+      return;
+    }
+
+    if (!window.confirm('هل أنت متأكد من حذف هذه المرحلة؟')) return;
 
     try {
       await deleteGrade(id);

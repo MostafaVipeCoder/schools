@@ -1,17 +1,5 @@
 import { supabase } from '../lib/supabase';
-
-export interface Class {
-    id?: string;
-    user_id?: string;
-    name: string;
-    grade_level: string;
-    stage: string;
-    capacity?: number;
-    teacher_name?: string;
-    grade_id?: string;
-    created_at?: string;
-    updated_at?: string;
-}
+import type { Class } from '../types';
 
 export const classService = {
     /**
@@ -44,10 +32,17 @@ export const classService = {
     /**
      * إضافة فصل جديد
      */
+    /**
+     * إضافة فصل جديد
+     */
     async create(classData: Omit<Class, 'id' | 'created_at' | 'updated_at'>) {
+        // Get current user
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) throw new Error('User not authenticated');
+
         const { data, error } = await supabase
             .from('classes')
-            .insert([classData])
+            .insert([{ ...classData, user_id: user.id }])
             .select()
             .single();
 

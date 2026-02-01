@@ -8,17 +8,30 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
 import { Search, Plus, Edit, Trash2, Users } from 'lucide-react';
 import { toast } from 'sonner';
-import { classService, type Class as ClassType } from '../../services/classService';
-import { gradeService, type Grade } from '../../services/gradeService';
+import { classService } from '../../services/classService';
+import { gradeService } from '../../services/gradeService';
+import type { Class as ClassType, Grade } from '../../types';
 import { useNavigate } from 'react-router-dom';
 import { useClasses } from '../../hooks/useClasses';
 import { useGrades } from '../../hooks/useGrades';
 import { useStudents } from '../../hooks/useStudents';
+import { Badge } from '../ui/badge';
+import { Checkbox } from '../ui/checkbox';
 
 // Extended Class interface for UI
 interface Class extends ClassType {
   currentStudents?: number;
 }
+
+const DAYS_OF_WEEK = [
+  { id: 'Saturday', name: 'السبت' },
+  { id: 'Sunday', name: 'الأحد' },
+  { id: 'Monday', name: 'الاثنين' },
+  { id: 'Tuesday', name: 'الثلاثاء' },
+  { id: 'Wednesday', name: 'الأربعاء' },
+  { id: 'Thursday', name: 'الخميس' },
+  { id: 'Friday', name: 'الجمعة' },
+];
 
 export default function Classes() {
   const navigate = useNavigate();
@@ -37,7 +50,9 @@ export default function Classes() {
     stage: '',
     grade_id: '',
     capacity: 30,
-    teacher_name: ''
+    teacher_name: '',
+    attendance_type: 'daily' as 'daily' | 'scheduled',
+    attendance_days: [] as string[]
   });
 
   const [selectedClass, setSelectedClass] = useState<Class | null>(null);
@@ -65,7 +80,9 @@ export default function Classes() {
         stage: formData.stage,
         capacity: Number(formData.capacity),
         teacher_name: formData.teacher_name,
-        grade_id: formData.grade_id
+        grade_id: formData.grade_id,
+        attendance_type: formData.attendance_type,
+        attendance_days: formData.attendance_days
       });
 
       setIsAddDialogOpen(false);
@@ -87,7 +104,9 @@ export default function Classes() {
           stage: formData.stage,
           capacity: Number(formData.capacity),
           teacher_name: formData.teacher_name,
-          grade_id: formData.grade_id
+          grade_id: formData.grade_id,
+          attendance_type: formData.attendance_type,
+          attendance_days: formData.attendance_days
         }
       });
 
@@ -115,7 +134,9 @@ export default function Classes() {
       stage: '',
       grade_id: '',
       capacity: 30,
-      teacher_name: ''
+      teacher_name: '',
+      attendance_type: 'daily',
+      attendance_days: []
     });
   };
 
@@ -127,7 +148,9 @@ export default function Classes() {
       stage: cls.stage,
       grade_id: cls.grade_id || '',
       capacity: cls.capacity || 30,
-      teacher_name: cls.teacher_name || ''
+      teacher_name: cls.teacher_name || '',
+      attendance_type: cls.attendance_type || 'daily',
+      attendance_days: cls.attendance_days || []
     });
     setIsEditDialogOpen(true);
   };
@@ -226,6 +249,42 @@ export default function Classes() {
                   />
                 </div>
               </div>
+
+              <div className="space-y-3">
+                <Label>نظام الحضور</Label>
+                <Select
+                  value={formData.attendance_type}
+                  onValueChange={(value: 'daily' | 'scheduled') => setFormData({ ...formData, attendance_type: value })}
+                >
+                  <SelectTrigger id="add-attendance-type">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="daily">حضور يومي (جميع الأيام)</SelectItem>
+                    <SelectItem value="scheduled">حضور في أيام محددة</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                {formData.attendance_type === 'scheduled' && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 p-3 bg-gray-50 rounded-lg border">
+                    {DAYS_OF_WEEK.map((day) => (
+                      <div key={day.id} className="flex items-center space-x-2 space-x-reverse">
+                        <Checkbox
+                          id={`add-day-${day.id}`}
+                          checked={formData.attendance_days.includes(day.id)}
+                          onCheckedChange={(checked) => {
+                            const newDays = checked
+                              ? [...formData.attendance_days, day.id]
+                              : formData.attendance_days.filter(d => d !== day.id);
+                            setFormData({ ...formData, attendance_days: newDays });
+                          }}
+                        />
+                        <Label htmlFor={`add-day-${day.id}`} className="text-xs">{day.name}</Label>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsAddDialogOpen(false)}>
@@ -291,6 +350,7 @@ export default function Classes() {
                   <TableHead className="text-right">المرحلة الدراسية</TableHead>
                   <TableHead className="text-right">المعلم</TableHead>
                   <TableHead className="text-right">الطلاب</TableHead>
+                  <TableHead className="text-right">نظام الحضور</TableHead>
                   <TableHead className="text-right">السعة</TableHead>
                   <TableHead className="text-center">الإجراءات</TableHead>
                 </TableRow>
@@ -314,6 +374,19 @@ export default function Classes() {
                           <Users className="h-4 w-4 text-gray-400" />
                           <span>{cls.studentCount || 0} / {cls.capacity}</span>
                         </div>
+                      </TableCell>
+                      <TableCell>
+                        {cls.attendance_type === 'scheduled' ? (
+                          <div className="flex flex-wrap gap-1">
+                            {cls.attendance_days?.map(d => (
+                              <Badge key={d} variant="outline" className="text-[10px] px-1 py-0">
+                                {DAYS_OF_WEEK.find(dw => dw.id === d)?.name}
+                              </Badge>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-blue-600 font-medium">يومي</span>
+                        )}
                       </TableCell>
                       <TableCell>
                         <div className="w-full bg-gray-200 rounded-full h-2">
@@ -423,6 +496,42 @@ export default function Classes() {
                   onChange={(e) => setFormData({ ...formData, teacher_name: e.target.value })}
                 />
               </div>
+            </div>
+
+            <div className="space-y-3">
+              <Label>نظام الحضور</Label>
+              <Select
+                value={formData.attendance_type}
+                onValueChange={(value: 'daily' | 'scheduled') => setFormData({ ...formData, attendance_type: value })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="daily">حضور يومي (جميع الأيام)</SelectItem>
+                  <SelectItem value="scheduled">حضور في أيام محددة</SelectItem>
+                </SelectContent>
+              </Select>
+
+              {formData.attendance_type === 'scheduled' && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 p-3 bg-gray-50 rounded-lg border">
+                  {DAYS_OF_WEEK.map((day) => (
+                    <div key={day.id} className="flex items-center space-x-2 space-x-reverse">
+                      <Checkbox
+                        id={`edit-day-${day.id}`}
+                        checked={formData.attendance_days.includes(day.id)}
+                        onCheckedChange={(checked) => {
+                          const newDays = checked
+                            ? [...formData.attendance_days, day.id]
+                            : formData.attendance_days.filter(d => d !== day.id);
+                          setFormData({ ...formData, attendance_days: newDays });
+                        }}
+                      />
+                      <Label htmlFor={`edit-day-${day.id}`} className="text-xs">{day.name}</Label>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
           <DialogFooter>

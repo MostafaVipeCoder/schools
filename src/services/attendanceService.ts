@@ -51,9 +51,13 @@ export const attendanceService = {
      * تسجيل حضور
      */
     async markAttendance(attendance: Omit<Attendance, 'id' | 'created_at'>) {
+        // Get current user to ensure data ownership
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) throw new Error('User not authenticated');
+
         const { data, error } = await supabase
             .from('attendance')
-            .upsert([attendance], { onConflict: 'student_id, date' })
+            .upsert([{ ...attendance, user_id: user.id }], { onConflict: 'student_id, date' })
             .select()
             .single();
 

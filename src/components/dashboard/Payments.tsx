@@ -748,9 +748,12 @@ export default function Payments() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>تفاصيل الفاتورة</DialogTitle>
+            <DialogDescription>
+              عرض معلومات الفاتورة الكاملة
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <p className="text-sm text-gray-600">اسم الطالب</p>
                 <p className="text-black">{selectedInvoice?.students?.name}</p>

@@ -29,5 +29,6 @@ export const useAttendance = () => {
         isLoading: attendanceQuery.isLoading,
         isError: attendanceQuery.isError,
         markAttendance: markAttendanceMutation.mutateAsync,
+        refreshAttendance: attendanceQuery.refetch,
     };
 };

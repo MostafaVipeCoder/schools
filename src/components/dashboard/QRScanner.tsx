@@ -8,8 +8,20 @@ import { toast } from 'sonner';
 import { Html5Qrcode } from 'html5-qrcode';
 import { useAttendance } from '../../hooks/useAttendance';
 import { useStudents } from '../../hooks/useStudents';
-import { format, isWithinInterval, parse } from 'date-fns';
+import { format, isWithinInterval, parse, getDay } from 'date-fns';
+import { ar } from 'date-fns/locale';
 import { useSettings } from '../../hooks/useSettings';
+import { useClasses } from '../../hooks/useClasses';
+
+const DAYS_MAP: Record<number, string> = {
+  0: 'Sunday',
+  1: 'Monday',
+  2: 'Tuesday',
+  3: 'Wednesday',
+  4: 'Thursday',
+  5: 'Friday',
+  6: 'Saturday',
+};
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 import {
   Command,
@@ -41,6 +53,7 @@ export default function QRScanner() {
 
   const { markAttendance, attendance } = useAttendance();
   const { students } = useStudents();
+  const { classes } = useClasses();
   const { settings } = useSettings();
 
   // Initialize and get available cameras
@@ -195,12 +208,24 @@ export default function QRScanner() {
         return;
       }
 
+      // Check Class Schedule
+      const studentClass = classes.find(c => c.id === student.class_id);
+      const isUnscheduled = studentClass && studentClass.attendance_type === 'scheduled' &&
+        !studentClass.attendance_days?.includes(DAYS_MAP[now.getDay()]);
+
+      if (isUnscheduled) {
+        toast.info(`ℹ️ يوم حضور إضافي`, {
+          description: `${student.name} - هذا اليوم ليس من أيام الحضور المجدولة لفصله`,
+          duration: 4000,
+        });
+      }
+
       // Record Attendance
       await markAttendance({
         student_id: studentId,
         date: today,
         present: true,
-        notes: 'QR Scan'
+        notes: isUnscheduled ? 'QR Scan (يوم إضافي)' : 'QR Scan'
       });
 
       // UI Success

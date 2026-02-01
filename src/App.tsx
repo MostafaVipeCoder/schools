@@ -1,9 +1,9 @@
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { useState, useEffect, lazy, Suspense } from 'react';
 import LoadingSpinner from './components/ui/loading-spinner';
-import ErrorBoundary from './components/ui/error-boundary';
 import { supabase } from './lib/supabase';
 import { Session } from '@supabase/supabase-js';
+import { Toaster } from './components/ui/sonner';
 
 // Lazy load components
 const Login = lazy(() => import('./components/auth/Login'));
@@ -11,262 +11,167 @@ const Register = lazy(() => import('./components/auth/Register'));
 const ForgetPassword = lazy(() => import('./components/auth/ForgetPassword'));
 const VerifyEmail = lazy(() => import('./components/auth/VerifyEmail'));
 
-// Eager load dashboard components for smoother navigation
-import DashboardLayout from './components/dashboard/DashboardLayout';
-import Students from './components/dashboard/Students';
-import Classes from './components/dashboard/Classes';
-import Grades from './components/dashboard/Grades';
-import Payments from './components/dashboard/Payments';
-import Reports from './components/dashboard/Reports';
-import QRScanner from './components/dashboard/QRScanner';
-import ClassDetails from './components/dashboard/ClassDetails';
-import StudentProfile from './components/dashboard/StudentProfile';
-import Settings from './components/dashboard/Settings';
-import { Toaster } from './components/ui/sonner';
+// Dashboard components
+const DashboardLayout = lazy(() => import('./components/dashboard/DashboardLayout'));
+const Students = lazy(() => import('./components/dashboard/Students'));
+const Classes = lazy(() => import('./components/dashboard/Classes'));
+const Grades = lazy(() => import('./components/dashboard/Grades'));
+const Payments = lazy(() => import('./components/dashboard/Payments'));
+const Reports = lazy(() => import('./components/dashboard/Reports'));
+const QRScanner = lazy(() => import('./components/dashboard/QRScanner'));
+const ClassDetails = lazy(() => import('./components/dashboard/ClassDetails'));
+const StudentProfile = lazy(() => import('./components/dashboard/StudentProfile'));
+const ExpelledStudents = lazy(() => import('./components/dashboard/ExpelledStudents'));
+const Settings = lazy(() => import('./components/dashboard/Settings'));
+const AdminLayout = lazy(() => import('./components/dashboard/admin/AdminLayout'));
+const AdminOverview = lazy(() => import('./components/dashboard/admin/AdminOverview'));
+const AdminCustomers = lazy(() => import('./components/dashboard/admin/AdminCustomers'));
+const AdminPackages = lazy(() => import('./components/dashboard/admin/AdminPackages'));
+const AdminSettings = lazy(() => import('./components/dashboard/admin/AdminSettings'));
+const DashboardOverview = lazy(() => import('./components/dashboard/DashboardOverview'));
+const FinancialReports = lazy(() => import('./components/dashboard/FinancialReports'));
+const PerformanceReports = lazy(() => import('./components/dashboard/PerformanceReports'));
+
+// Auth Guard Components
+const ProtectedRoute = ({
+  isAuthenticated,
+  userRole,
+  allowedRoles,
+  children
+}: {
+  isAuthenticated: boolean;
+  userRole: string | null;
+  allowedRoles?: string[];
+  children?: React.ReactNode;
+}) => {
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  if (allowedRoles && userRole && !allowedRoles.includes(userRole)) {
+    return <Navigate to={userRole === 'admin' ? "/admin" : "/dashboard"} replace />;
+  }
+  return children ? <>{children}</> : <Outlet />;
+};
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isVerified, setIsVerified] = useState(false);
   const [userEmail, setUserEmail] = useState('');
+  const [userRole, setUserRole] = useState<'admin' | 'manager' | 'staff' | 'accountant' | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setIsAuthenticated(!!session);
-      if (session?.user?.email) {
-        setUserEmail(session.user.email);
-        // Basic check for verification - in production check email_confirmed_at
-        setIsVerified(!!session.user.email_confirmed_at);
-      }
-    });
+    let mounted = true;
 
-    // Listen for auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setIsAuthenticated(!!session);
-      if (session?.user?.email) {
-        setUserEmail(session.user.email);
+    const handleSession = async (session: Session | null) => {
+      if (!mounted) return;
+
+      if (session) {
+        setIsAuthenticated(true);
+        setUserEmail(session.user.email || '');
         setIsVerified(!!session.user.email_confirmed_at);
+
+        try {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('role')
+            .eq('id', session.user.id)
+            .single();
+
+          if (mounted) {
+            setUserRole(profile?.role || (session.user.app_metadata?.role as any) || 'manager');
+          }
+        } catch (error) {
+          console.error('Profile fetch error:', error);
+          if (mounted) setUserRole('manager');
+        }
       } else {
+        setIsAuthenticated(false);
         setUserEmail('');
         setIsVerified(false);
+        setUserRole(null);
       }
+      setLoading(false);
+    };
+
+    supabase.auth.onAuthStateChange((_event, session) => {
+      handleSession(session);
     });
 
-    return () => subscription.unsubscribe();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      handleSession(session);
+    });
+
+    return () => { mounted = false; };
   }, []);
 
-  // Handlers now largely handled by onAuthStateChange, but keeping for compatibility if needed
-  // or simple wrappers. 
-
   const handleLogout = async () => {
-    try {
-      await supabase.auth.signOut();
-      // State updates handled by onAuthStateChange
-      localStorage.clear(); // Clear local storage leftovers
-    } catch (error) {
-      console.error('Error signing out:', error);
-    }
+    await supabase.auth.signOut();
+    localStorage.clear();
+    setIsAuthenticated(false);
+    setUserRole(null);
+    window.location.replace('/login');
   };
 
-  const handleVerify = () => {
-    // This might be manual override or refresh
-    setIsVerified(true);
-  };
-
-  const handleLogin = (email: string) => {
-    // Deprecated: handled by supabase auth state listener
-    console.log('Login callback triggered for:', email);
-  };
-
-  // Note: handleLogin is no longer needed as Login component calls supabase directly
-  // But we keep it empty or remove if routes don't validly need it. 
-  // The Login component prop onLogin can be optional or ignored.
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-white text-right" dir="rtl">
+        <div className="flex flex-col items-center gap-4">
+          <LoadingSpinner />
+          <p className="text-gray-500 animate-pulse font-bold">جاري تحميل النظام...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div dir="rtl" className="min-h-screen bg-white">
       <Router>
         <Suspense fallback={<LoadingSpinner />}>
           <Routes>
-            <Route path="/" element={<Navigate to={isAuthenticated ? "/dashboard" : "/login"} replace />} />
-            <Route
-              path="/login"
-              element={
-                isAuthenticated ?
-                  <Navigate to="/dashboard" /> :
-                  <Login onLogin={handleLogin} />
-              }
-            />
-            <Route
-              path="/register"
-              element={
-                isAuthenticated ?
-                  <Navigate to="/dashboard" /> :
-                  <Register onRegister={handleLogin} />
-              }
-            />
+            {/* Public Routes */}
+            <Route path="/login" element={!isAuthenticated ? <Login onLogin={() => { }} /> : <Navigate to="/" replace />} />
+            <Route path="/register" element={!isAuthenticated ? <Register onRegister={() => { }} /> : <Navigate to="/" replace />} />
             <Route path="/forget-password" element={<ForgetPassword />} />
+            <Route path="/verify-email" element={<VerifyEmail email={userEmail} onVerify={() => setIsVerified(true)} />} />
+
+            {/* Root Redirect */}
+            <Route path="/" element={<Navigate to={isAuthenticated ? (userRole === 'admin' ? "/admin" : "/dashboard") : "/login"} replace />} />
+
+            {/* Admin Protected Routes */}
             <Route
-              path="/verify-email"
-              element={
-                <VerifyEmail
-                  email={userEmail}
-                  onVerify={handleVerify}
-                />
-              }
-            />
+              path="/admin"
+              element={<ProtectedRoute isAuthenticated={isAuthenticated} userRole={userRole} allowedRoles={['admin']} />}
+            >
+              <Route element={<AdminLayout onLogout={handleLogout} userEmail={userEmail} />}>
+                <Route index element={<AdminOverview />} />
+                <Route path="customers" element={<AdminCustomers />} />
+                <Route path="packages" element={<AdminPackages />} />
+                <Route path="settings" element={<AdminSettings />} />
+              </Route>
+            </Route>
+
+            {/* Manager/Staff Protected Routes */}
             <Route
               path="/dashboard"
-              element={
-                isAuthenticated ?
-                  <DashboardLayout
-                    onLogout={handleLogout}
-                    isVerified={isVerified}
-                    userEmail={userEmail}
-                    onVerify={handleVerify}
-                  >
-                    <Students />
-                  </DashboardLayout> :
-                  <Navigate to="/login" />
-              }
-            />
-            <Route
-              path="/dashboard/students"
-              element={
-                isAuthenticated ?
-                  <DashboardLayout
-                    onLogout={handleLogout}
-                    isVerified={isVerified}
-                    userEmail={userEmail}
-                    onVerify={handleVerify}
-                  >
-                    <Students />
-                  </DashboardLayout> :
-                  <Navigate to="/login" />
-              }
-            />
-            <Route
-              path="/dashboard/classes"
-              element={
-                isAuthenticated ?
-                  <DashboardLayout
-                    onLogout={handleLogout}
-                    isVerified={isVerified}
-                    userEmail={userEmail}
-                    onVerify={handleVerify}
-                  >
-                    <Classes />
-                  </DashboardLayout> :
-                  <Navigate to="/login" />
-              }
-            />
-            <Route
-              path="/dashboard/grades"
-              element={
-                isAuthenticated ?
-                  <DashboardLayout
-                    onLogout={handleLogout}
-                    isVerified={isVerified}
-                    userEmail={userEmail}
-                    onVerify={handleVerify}
-                  >
-                    <Grades />
-                  </DashboardLayout> :
-                  <Navigate to="/login" />
-              }
-            />
-            <Route
-              path="/dashboard/payments"
-              element={
-                isAuthenticated ?
-                  <DashboardLayout
-                    onLogout={handleLogout}
-                    isVerified={isVerified}
-                    userEmail={userEmail}
-                    onVerify={handleVerify}
-                  >
-                    <Payments />
-                  </DashboardLayout> :
-                  <Navigate to="/login" />
-              }
-            />
-            <Route
-              path="/dashboard/reports"
-              element={
-                isAuthenticated ?
-                  <DashboardLayout
-                    onLogout={handleLogout}
-                    isVerified={isVerified}
-                    userEmail={userEmail}
-                    onVerify={handleVerify}
-                  >
-                    <Reports />
-                  </DashboardLayout> :
-                  <Navigate to="/login" />
-              }
-            />
-            <Route
-              path="/dashboard/qr-scanner"
-              element={
-                isAuthenticated ?
-                  <DashboardLayout
-                    onLogout={handleLogout}
-                    isVerified={isVerified}
-                    userEmail={userEmail}
-                    onVerify={handleVerify}
-                  >
-                    <QRScanner />
-                  </DashboardLayout> :
-                  <Navigate to="/login" />
-              }
-            />
-            <Route
-              path="/dashboard/students/:id"
-              element={
-                isAuthenticated ?
-                  <DashboardLayout
-                    onLogout={handleLogout}
-                    isVerified={isVerified}
-                    userEmail={userEmail}
-                    onVerify={handleVerify}
-                  >
-                    <StudentProfile />
-                  </DashboardLayout> :
-                  <Navigate to="/login" />
-              }
-            />
-            <Route
-              path="/dashboard/classes/:id"
-              element={
-                isAuthenticated ?
-                  <DashboardLayout
-                    onLogout={handleLogout}
-                    isVerified={isVerified}
-                    userEmail={userEmail}
-                    onVerify={handleVerify}
-                  >
-                    <ClassDetails />
-                  </DashboardLayout> :
-                  <Navigate to="/login" />
-              }
-            />
-            <Route
-              path="/dashboard/settings"
-              element={
-                isAuthenticated ?
-                  <DashboardLayout
-                    onLogout={handleLogout}
-                    isVerified={isVerified}
-                    userEmail={userEmail}
-                    onVerify={handleVerify}
-                  >
-                    <Settings />
-                  </DashboardLayout> :
-                  <Navigate to="/login" />
-              }
-            />
-            {/* Catch-all route */}
+              element={<ProtectedRoute isAuthenticated={isAuthenticated} userRole={userRole} allowedRoles={['manager', 'staff', 'accountant']} />}
+            >
+              <Route element={<DashboardLayout onLogout={handleLogout} isVerified={isVerified} userEmail={userEmail} onVerify={() => setIsVerified(true)} />}>
+                <Route index element={<DashboardOverview />} />
+                <Route path="students" element={<Students />} />
+                <Route path="students/expelled" element={<ExpelledStudents />} />
+                <Route path="students/:id" element={<StudentProfile />} />
+                <Route path="classes" element={<Classes />} />
+                <Route path="classes/:id" element={<ClassDetails />} />
+                <Route path="grades" element={<Grades />} />
+                <Route path="payments" element={<Payments />} />
+                <Route path="reports" element={<Reports />} />
+                <Route path="performance" element={<PerformanceReports />} />
+                <Route path="financial-reports" element={<FinancialReports />} />
+                <Route path="qr-scanner" element={<QRScanner />} />
+                <Route path="settings" element={<Settings />} />
+              </Route>
+            </Route>
+
+            {/* Catch-all */}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>

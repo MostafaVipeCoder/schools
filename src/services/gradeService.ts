@@ -1,14 +1,5 @@
 import { supabase } from '../lib/supabase';
-
-export interface Grade {
-    id?: string;
-    user_id?: string;
-    name: string;
-    stage: string;
-    description?: string;
-    created_at?: string;
-    updated_at?: string;
-}
+import type { Grade } from '../types';
 
 export const gradeService = {
     /**
@@ -75,9 +66,13 @@ export const gradeService = {
      * إضافة مرحلة دراسية جديدة
      */
     async create(grade: Omit<Grade, 'id' | 'created_at' | 'updated_at'>) {
+        // Get current user to ensure data ownership
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) throw new Error('User not authenticated');
+
         const { data, error } = await supabase
             .from('grades')
-            .insert([grade])
+            .insert([{ ...grade, user_id: user.id }])
             .select()
             .single();
 

@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react-swc';
 import path from 'path';
 
 export default defineConfig({
-  base: '/schools/',
+  base: '/',
   plugins: [react()],
   resolve: {
     extensions: ['.js', '.jsx', '.ts', '.tsx', '.json'],
@@ -19,7 +19,9 @@ export default defineConfig({
       output: {
         manualChunks: {
           'react-vendor': ['react', 'react-dom', 'react-router-dom'],
-          'ui-vendor': ['lucide-react', 'sonner', 'recharts'],
+          'charts': ['recharts'],
+          'icons': ['lucide-react'],
+          'ui-vendor': ['sonner'],
           'radix-ui': [
             '@radix-ui/react-dialog',
             '@radix-ui/react-select',

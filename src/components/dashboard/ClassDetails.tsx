@@ -22,17 +22,21 @@ import StudentQRCode from './StudentQRCode';
 import { useStudents } from '../../hooks/useStudents';
 import { useClasses } from '../../hooks/useClasses';
 import { useAttendance } from '../../hooks/useAttendance';
-import { type Student as StudentType } from '../../services/studentService';
+import { Student, Class, Attendance } from '../../types';
 import { cn } from '../ui/utils';
+import { getDay } from 'date-fns';
 
-interface Student extends StudentType {
-    classes?: {
-        id: string;
-        name: string;
-        grade_level: string;
-        stage?: string;
-    };
-}
+const DAYS_MAP: Record<number, string> = {
+    0: 'Sunday',
+    1: 'Monday',
+    2: 'Tuesday',
+    3: 'Wednesday',
+    4: 'Thursday',
+    5: 'Friday',
+    6: 'Saturday',
+};
+
+// Redundant local interface removed
 
 export default function ClassDetails() {
     const { id } = useParams<{ id: string }>();
@@ -50,33 +54,37 @@ export default function ClassDetails() {
     const [isQRDialogOpen, setIsQRDialogOpen] = useState(false);
     const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
 
+    const effectiveClass = useMemo(() => {
+        return classes.find((c: Class) => c.id === id || c.slug === id);
+    }, [classes, id]);
+
+    const classId = effectiveClass?.id;
+
     const [formData, setFormData] = useState({
         name: '',
         phone: '',
         email: '',
-        class_id: id || '',
+        class_id: classId || '',
         guardian_name: '',
         guardian_phone: '',
         payment_status: 'regular' as 'regular' | 'exempt'
     });
 
-    const selectedClass = useMemo(() => classes.find(c => c.id === id), [classes, id]);
-
     const classStudents = useMemo(() =>
-        (allStudents as Student[]).filter(s => s.class_id === id),
-        [allStudents, id]
+        (allStudents as Student[]).filter(s => s.class_id === classId),
+        [allStudents, classId]
     );
 
     const todayStr = new Date().toISOString().split('T')[0];
     const todayAttendance = useMemo(() =>
-        attendance.filter(a => a.date === todayStr),
+        attendance.filter((a: Attendance) => a.date === todayStr),
         [attendance, todayStr]
     );
 
     const stats = useMemo(() => {
         const total = classStudents.length;
-        const present = classStudents.filter(s =>
-            todayAttendance.some(a => a.student_id === s.id && a.present)
+        const present = classStudents.filter((s: Student) =>
+            todayAttendance.some((a: Attendance) => a.student_id === s.id && a.present)
         ).length;
         const absent = total - present;
         const percentage = total > 0 ? (present / total) * 100 : 0;
@@ -84,7 +92,7 @@ export default function ClassDetails() {
         return { total, present, absent, percentage };
     }, [classStudents, todayAttendance]);
 
-    const filteredStudents = classStudents.filter(student =>
+    const filteredStudents = classStudents.filter((student: Student) =>
         student.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         (student.email?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
         student.phone.includes(searchTerm) ||
@@ -107,7 +115,7 @@ export default function ClassDetails() {
             await addStudent({
                 ...formData,
                 email: formData.email || undefined,
-                class_id: id,
+                class_id: classId!,
             });
 
             setIsAddDialogOpen(false);
@@ -126,7 +134,7 @@ export default function ClassDetails() {
                 data: {
                     ...formData,
                     email: formData.email || undefined,
-                    class_id: formData.class_id || id,
+                    class_id: formData.class_id || classId || '',
                 }
             });
 
@@ -148,13 +156,23 @@ export default function ClassDetails() {
 
     const handleToggleAttendance = async (studentId: string, currentPresent: boolean) => {
         try {
+            const isUnscheduled = effectiveClass && effectiveClass.attendance_type === 'scheduled' &&
+                !effectiveClass.attendance_days?.includes(DAYS_MAP[new Date().getDay()]);
+
             await markAttendance({
                 student_id: studentId,
                 date: todayStr,
                 present: !currentPresent,
-                notes: 'تحديث يدوي من صفحة الفصل'
+                notes: !currentPresent && isUnscheduled ? 'يوم إضافي' : 'تحديث يدوي من صفحة الفصل'
             });
-            toast.success(!currentPresent ? 'تم تسجيل الحضور' : 'تم تسجيل الغياب');
+
+            if (!currentPresent && isUnscheduled) {
+                toast.info('ℹ️ تم تسجيل حضور (يوم إضافي)', {
+                    description: 'هذا اليوم ليس من أيام الحضور المجدولة لهذا الفصل'
+                });
+            } else {
+                toast.success(!currentPresent ? 'تم تسجيل الحضور' : 'تم تسجيل الغياب');
+            }
         } catch (error) {
             console.error(error);
             toast.error('حدث خطأ أثناء تحديث الحضور');
@@ -166,7 +184,7 @@ export default function ClassDetails() {
             name: '',
             phone: '',
             email: '',
-            class_id: id || '',
+            class_id: classId || '',
             guardian_name: '',
             guardian_phone: '',
             payment_status: 'regular'
@@ -179,7 +197,7 @@ export default function ClassDetails() {
             name: student.name,
             phone: student.phone,
             email: student.email || '',
-            class_id: student.class_id || id || '',
+            class_id: student.class_id || classId || '',
             guardian_name: student.guardian_name,
             guardian_phone: student.guardian_phone,
             payment_status: student.payment_status
@@ -198,7 +216,7 @@ export default function ClassDetails() {
         );
     }
 
-    if (!selectedClass) {
+    if (!effectiveClass) {
         return (
             <div className="text-center py-12">
                 <h2 className="text-xl font-bold mb-4">الفصل غير موجود</h2>
@@ -217,7 +235,7 @@ export default function ClassDetails() {
                     </Button>
                     <div>
                         <h2 className="text-2xl font-bold text-black mb-1">
-                            {selectedClass.name} - {selectedClass.grade_level}
+                            {effectiveClass.name} - {effectiveClass.grade_level}
                         </h2>
                         <p className="text-gray-600">طلاب الفصل وإحصائيات الحضور</p>
                     </div>
@@ -284,8 +302,8 @@ export default function ClassDetails() {
                             </TableHeader>
                             <TableBody>
                                 {currentStudents.length > 0 ? (
-                                    currentStudents.map((student) => {
-                                        const isPresentToday = todayAttendance.some(a => a.student_id === student.id && a.present);
+                                    currentStudents.map((student: Student) => {
+                                        const isPresentToday = todayAttendance.some((a: Attendance) => a.student_id === student.id && a.present);
                                         return (
                                             <TableRow key={student.id}>
                                                 <TableCell className="font-medium">{student.name}</TableCell>
@@ -554,7 +572,7 @@ export default function ClassDetails() {
                                         <SelectValue placeholder="اختر الفصل" />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        {classes.map((cls) => (
+                                        {classes.map((cls: Class) => (
                                             <SelectItem key={cls.id} value={cls.id || ''}>
                                                 {cls.name} ({cls.grade_level})
                                             </SelectItem>
@@ -581,7 +599,7 @@ export default function ClassDetails() {
                     student={{
                         id: selectedStudent.id || '',
                         name: selectedStudent.name,
-                        classes: selectedStudent.classes,
+                        classes: selectedStudent.class,
                         phone: selectedStudent.phone
                     }}
                 />

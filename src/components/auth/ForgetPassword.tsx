@@ -13,7 +13,7 @@ export default function ForgetPassword() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (email) {
       setIsSubmitted(true);
       toast.success('تم إرسال رابط إعادة تعيين كلمة المرور إلى بريدك الإلكتروني');
@@ -36,7 +36,7 @@ export default function ForgetPassword() {
           <CardHeader className="space-y-1">
             <CardTitle className="text-2xl text-center">استعادة كلمة المرور</CardTitle>
             <CardDescription className="text-center">
-              {isSubmitted 
+              {isSubmitted
                 ? 'تحقق من بريدك الإلكتروني'
                 : 'أدخل بريدك الإلكتروني لاستعادة كلمة المرور'
               }

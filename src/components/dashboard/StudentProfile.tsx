@@ -1,45 +1,30 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from '../ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
-import { Badge } from '../ui/badge';
-import { Progress } from '../ui/progress';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '../ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Label } from '../ui/label';
 import { Input } from '../ui/input';
-import {
-    User,
-    Calendar,
-    ArrowRight,
-    TrendingUp,
-    AlertTriangle,
-    Phone,
-    Mail,
-    GraduationCap,
-    History,
-    ShieldAlert,
-    Eye
-} from 'lucide-react';
+import { Calendar, History, CreditCard, GraduationCap, Printer } from 'lucide-react';
 import { toast } from 'sonner';
-import { format } from 'date-fns';
 import { useStudents } from '../../hooks/useStudents';
 import { useAttendance } from '../../hooks/useAttendance';
 import { useClasses } from '../../hooks/useClasses';
+import { usePayments } from '../../hooks/usePayments';
 import { supabase } from '../../lib/supabase';
-import { type Student } from '../../services/studentService';
-import { type Attendance } from '../../services/attendanceService';
-import { type Class } from '../../services/classService';
+import { Student, Attendance, Class, Payment } from '../../types';
+import { useSuspensions } from '../../hooks/useSuspensions';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
+import { attendanceService } from '../../services/attendanceService';
 
-interface Suspension {
-    id: string;
-    student_id: string;
-    duration_days: number;
-    reason: string;
-    start_date: string;
-    created_at: string;
-}
+// New Components
+import StudentProfileHeader from './StudentProfileHeader';
+import QuickActionsToolbar from './QuickActionsToolbar';
+import AttendanceTab from './AttendanceTab';
+import PaymentsTab from './PaymentsTab';
+import SuspensionsTab from './SuspensionsTab';
+
+
 
 export default function StudentProfile() {
     const { id } = useParams<{ id: string }>();
@@ -48,24 +33,72 @@ export default function StudentProfile() {
     const { students: rawStudents, isLoading: isStudentsLoading, updateStudent } = useStudents();
     const students = rawStudents as Student[];
 
-    const { attendance: rawAttendance, isLoading: isAttendanceLoading } = useAttendance();
+    const { attendance: rawAttendance, isLoading: isAttendanceLoading, refreshAttendance } = useAttendance();
     const attendance = rawAttendance as Attendance[];
 
-    const { classes, isLoading: isClassesLoading } = useClasses();
+    // Payments Hook
+    const { payments: rawPayments, isLoading: isPaymentsLoading } = usePayments();
+    const payments = rawPayments as Payment[];
 
-    const [suspensions, setSuspensions] = useState<Suspension[]>([]);
+    const [student, setStudent] = useState<Student | null>(null);
+    const [isStudentLoadingState, setIsStudentLoadingState] = useState(true);
+
+    const { classes, isLoading: isClassesLoading } = useClasses();
+    const { suspensions, isLoading: isSuspensionsLoading, addSuspension } = useSuspensions(student?.id);
+
     const [isSuspendDialogOpen, setIsSuspendDialogOpen] = useState(false);
     const [suspensionForm, setSuspensionForm] = useState({
         duration_days: 1,
         reason: '',
-        status: 'suspended' as 'suspended' | 'expelled'
+        status: 'warning' as 'warning' | 'suspension' | 'expulsion' | 'parent_notification'
     });
 
-    const student = useMemo(() => students.find((s: Student) => s.id === id), [students, id]);
+    // Tab state
+    const [activeTab, setActiveTab] = useState('attendance');
+
+    const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+    const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false);
+    const [paymentForm, setPaymentForm] = useState({
+        amount: 50,
+        month: new Date().toLocaleString('ar-EG', { month: 'long' }),
+        year: new Date().getFullYear(),
+        notes: ''
+    });
+    const [formData, setFormData] = useState({
+        name: '',
+        phone: '',
+        email: '',
+        class_id: '',
+        guardian_name: '',
+        guardian_phone: '',
+        payment_status: 'regular' as 'regular' | 'exempt'
+    });
+
+    useEffect(() => {
+        if (id) {
+            setIsStudentLoadingState(true);
+            const fetchStudent = async () => {
+                const { studentService } = await import('../../services/studentService');
+                try {
+                    const data = await studentService.getById(id);
+                    setStudent(data);
+                } catch (err) {
+                    console.error(err);
+                } finally {
+                    setIsStudentLoadingState(false);
+                }
+            };
+            fetchStudent();
+        }
+    }, [id]);
 
     const studentAttendance = useMemo(() =>
-        attendance.filter((a: Attendance) => a.student_id === id),
-        [attendance, id]);
+        attendance.filter((a: Attendance) => a.student_id === student?.id),
+        [attendance, student]);
+
+    const studentPayments = useMemo(() =>
+        payments.filter((p: Payment) => p.student_id === student?.id),
+        [payments, student]);
 
     const classAttendance = useMemo(() => {
         if (!student?.class_id) return [];
@@ -85,83 +118,158 @@ export default function StudentProfile() {
 
         return { total, present, rate, classRate };
     }, [studentAttendance, classAttendance]);
+    const handleSuspend = async () => {
+        if (!student?.id) return;
 
-    useEffect(() => {
-        if (id) fetchSuspensions();
-    }, [id]);
+        if (!suspensionForm.reason.trim()) {
+            toast.error('يرجى كتابة سبب الإجراء أولاً');
+            return;
+        }
 
-    const fetchSuspensions = async () => {
         try {
-            const { data, error } = await supabase
-                .from('suspensions')
-                .select('*')
-                .eq('student_id', id)
-                .order('created_at', { ascending: false });
-
-            if (!error && data) {
-                setSuspensions(data);
+            if (suspensionForm.status !== 'parent_notification') {
+                await updateStudent({
+                    id: student.id,
+                    data: { status: suspensionForm.status === 'expulsion' ? 'expelled' : suspensionForm.status === 'suspension' ? 'suspended' : 'active' }
+                });
             }
+
+            await addSuspension({
+                student_id: student.id,
+                type: suspensionForm.status as any,
+                duration_days: suspensionForm.status === 'suspension' ? suspensionForm.duration_days : undefined,
+                reason: suspensionForm.reason,
+                start_date: new Date().toISOString().split('T')[0]
+            });
+
+            setIsSuspendDialogOpen(false);
+            setSuspensionForm({ duration_days: 1, reason: '', status: 'warning' });
         } catch (error) {
-            console.error('Error fetching suspensions:', error);
+            console.error(error);
         }
     };
 
-    const handleSuspend = async () => {
-        if (!id || !student) return;
+    const handleEditStudent = async () => {
+        if (!student?.id) return;
+
         try {
-            // Update student status in DB
             await updateStudent({
-                id,
-                data: { status: suspensionForm.status }
+                id: student.id,
+                data: {
+                    ...formData,
+                    email: formData.email || undefined,
+                    class_id: formData.class_id || undefined,
+                }
             });
 
-            // Log the suspension/expulsion
-            const { error } = await supabase
-                .from('suspensions')
-                .insert([{
-                    student_id: id,
-                    duration_days: suspensionForm.status === 'expelled' ? 0 : suspensionForm.duration_days,
-                    reason: suspensionForm.reason,
-                    start_date: new Date().toISOString().split('T')[0]
-                }]);
+            // Update local state for immediate feedback
+            setStudent(prev => prev ? { ...prev, ...formData } : null);
 
-            if (error) throw error;
-
-            toast.success(suspensionForm.status === 'expelled' ? 'تم فصل الطالب نهائياً' : 'تم وقف الطالب مؤقتاً');
-            setIsSuspendDialogOpen(false);
-            setSuspensionForm({ duration_days: 1, reason: '', status: 'suspended' });
-            fetchSuspensions();
+            setIsEditDialogOpen(false);
+            // toast.success is already called by the hook's onSuccess, but we added one in the profile too.
+            // Actually the hook calls toast.success with 'تم تعديل بيانات الطالب بنجاح'
         } catch (error) {
             console.error(error);
-            toast.error('فشل تنفيذ الإجراء. تأكد من وجود صلاحيات كافية.');
+            toast.error('فشل في تحديث البيانات');
         }
+    };
+
+    const openEditDialog = () => {
+        if (!student) return;
+        setFormData({
+            name: student.name,
+            phone: student.phone,
+            email: student.email || '',
+            class_id: student.class_id || '',
+            guardian_name: student.guardian_name,
+            guardian_phone: student.guardian_phone,
+            payment_status: student.payment_status
+        });
+        setIsEditDialogOpen(true);
     };
 
     const handleReactivate = async () => {
-        if (!id) return;
+        if (!student?.id) return;
         if (!window.confirm('هل أنت متأكد من إعادة تفعيل هذا الطالب؟')) return;
 
         try {
             await updateStudent({
-                id,
+                id: student.id,
                 data: { status: 'active' }
             });
             toast.success('تم إعادة تفعيل الطالب بنجاح');
-            fetchSuspensions();
         } catch (error) {
             console.error(error);
             toast.error('فشل في إعادة التفعيل');
         }
     };
 
-    if (isStudentsLoading || isAttendanceLoading || isClassesLoading) {
-        return <div className="p-8 text-center text-gray-500">جاري التحميل...</div>;
+    const handleRecordAttendance = async () => {
+        if (!student?.id) return;
+        try {
+            const today = new Date().toISOString().split('T')[0];
+            const processed = await attendanceService.markAttendance({
+                student_id: student.id,
+                date: today,
+                present: true,
+                notes: 'تسجيل سريع من ملف الطالب'
+            });
+            if (processed) {
+                toast.success('تم تسجيل حضور الطالب لليوم');
+                refreshAttendance();
+            }
+        } catch (error) {
+            console.error(error);
+            toast.error('فشل تسجيل الحضور');
+        }
+    };
+
+    const handleAddPayment = async () => {
+        if (!student?.id) return;
+        try {
+            const { paymentService } = await import('../../services/paymentService');
+            await paymentService.create({
+                student_id: student.id,
+                amount: paymentForm.amount,
+                month: paymentForm.month,
+                year: paymentForm.year,
+                status: 'paid',
+                payment_date: new Date().toISOString(),
+                notes: paymentForm.notes
+            });
+            toast.success('تم تسجيل الدفعة المالية بنجاح');
+            setIsPaymentDialogOpen(false);
+            // We should ideally refresh payments here
+            window.location.reload(); // Simple way for now as we don't have refreshPayments
+        } catch (error) {
+            console.error(error);
+            toast.error('فشل تسجيل الدفعة');
+        }
+    };
+
+    const handlePrintReport = () => {
+        window.print();
+    };
+
+    if (isStudentsLoading || isAttendanceLoading || isClassesLoading || isSuspensionsLoading) {
+        return (
+            <div className="flex h-[80vh] items-center justify-center">
+                <div className="text-center">
+                    <div className="h-12 w-12 border-4 border-orange-200 border-t-orange-600 rounded-full animate-spin mx-auto mb-4"></div>
+                    <p className="text-gray-500 font-medium">جاري تحميل ملف الطالب...</p>
+                </div>
+            </div>
+        );
     }
 
     if (!student) {
         return (
-            <div className="p-8 text-center">
-                <p className="text-gray-500 mb-4">الطالب غير موجود</p>
+            <div className="flex flex-col items-center justify-center h-[50vh] text-center p-8">
+                <div className="bg-red-50 p-4 rounded-full mb-4">
+                    <History className="h-8 w-8 text-red-500" />
+                </div>
+                <h2 className="text-xl font-bold text-gray-900 mb-2">الطالب غير موجود</h2>
+                <p className="text-gray-500 mb-6 max-w-md">لم نتمكن من العثور على بيانات هذا الطالب. قد يكون قد تم حذفه أو أن الرابط غير صحيح.</p>
                 <Button onClick={() => navigate('/dashboard/students')}>العودة لقائمة الطلاب</Button>
             </div>
         );
@@ -170,231 +278,205 @@ export default function StudentProfile() {
     const studentClass = classes.find((c: Class) => c.id === student.class_id);
 
     return (
-        <div className="space-y-6" dir="rtl">
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                    <Button variant="ghost" size="icon" onClick={() => navigate('/dashboard/students')}>
-                        <ArrowRight className="h-5 w-5" />
-                    </Button>
-                    <div>
-                        <h1 className="text-2xl font-bold text-gray-900">{student.name}</h1>
-                        <p className="text-gray-500">{studentClass?.name || 'غير محدد'} - {studentClass?.grade_level || ''}</p>
-                    </div>
-                </div>
-                <div className="flex items-center gap-2">
-                    {student.status && student.status !== 'active' ? (
-                        <Button
-                            variant="default"
-                            onClick={handleReactivate}
-                            className="bg-green-600 hover:bg-green-700 text-white flex items-center gap-2"
-                        >
-                            <TrendingUp className="h-4 w-4" />
-                            إعادة تفعيل الطالب
-                        </Button>
-                    ) : (
-                        <Button
-                            variant="destructive"
-                            onClick={() => setIsSuspendDialogOpen(true)}
-                            className="flex items-center gap-2"
-                        >
-                            <ShieldAlert className="h-4 w-4" />
-                            إجراء فصل/وقف
-                        </Button>
-                    )}
-                </div>
-            </div>
+        <div className="space-y-6 pb-20" dir="rtl">
+            {/* 1. Header Section */}
+            <StudentProfileHeader
+                student={student}
+                studentClass={studentClass}
+                onEdit={openEditDialog}
+                onSuspend={() => setIsSuspendDialogOpen(true)}
+                onReactivate={handleReactivate}
+            />
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Basic Info */}
-                <Card className="lg:col-span-1">
-                    <CardHeader>
-                        <CardTitle className="text-lg flex items-center gap-2">
-                            <User className="h-5 w-5 text-orange-500" />
-                            البيانات الأساسية
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                        <div className="flex items-center gap-3">
-                            <div className="p-2 bg-blue-50 rounded-lg">
-                                <Phone className="h-4 w-4 text-blue-500" />
-                            </div>
-                            <div>
-                                <p className="text-xs text-gray-500">رقم الهاتف</p>
-                                <p className="text-sm font-medium">{student.phone}</p>
-                            </div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <div className="p-2 bg-green-50 rounded-lg">
-                                <User className="h-4 w-4 text-green-500" />
-                            </div>
-                            <div>
-                                <p className="text-xs text-gray-500">ولي الأمر</p>
-                                <p className="text-sm font-medium">{student.guardian_name}</p>
-                            </div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <div className="p-2 bg-orange-50 rounded-lg">
-                                <Phone className="h-4 w-4 text-orange-500" />
-                            </div>
-                            <div>
-                                <p className="text-xs text-gray-500">هاتف ولي الأمر</p>
-                                <p className="text-sm font-medium">{student.guardian_phone}</p>
-                            </div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <div className="p-2 bg-purple-50 rounded-lg">
-                                <GraduationCap className="h-4 w-4 text-purple-500" />
-                            </div>
-                            <div>
-                                <p className="text-xs text-gray-500">حالة الرسوم</p>
-                                <Badge variant={student.payment_status === 'regular' ? 'default' : 'secondary'}>
-                                    {student.payment_status === 'regular' ? 'منتظم' : 'معفى'}
-                                </Badge>
-                            </div>
-                        </div>
-                        <div className="flex items-center gap-3 pt-2 border-t border-gray-50">
-                            <div className={`p-2 rounded-lg ${student.status === 'suspended' ? 'bg-yellow-50' : student.status === 'expelled' ? 'bg-red-50' : 'bg-green-50'}`}>
-                                <ShieldAlert className={`h-4 w-4 ${student.status === 'suspended' ? 'text-yellow-600' : student.status === 'expelled' ? 'text-red-600' : 'text-green-600'}`} />
-                            </div>
-                            <div>
-                                <p className="text-xs text-gray-500">حالة الطالب</p>
-                                <Badge className={student.status === 'suspended' ? 'bg-yellow-500 hover:bg-yellow-600' : student.status === 'expelled' ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'}>
-                                    {student.status === 'suspended' ? 'موقوف مؤقتاً' : student.status === 'expelled' ? 'مفصول نهائياً' : 'مقيد بنشاط'}
-                                </Badge>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
+            {/* 2. Quick Actions */}
+            <QuickActionsToolbar
+                onRecordAttendance={handleRecordAttendance}
+                onAddPayment={() => setIsPaymentDialogOpen(true)}
+                onPrintReport={handlePrintReport}
+            />
 
-                {/* Analytics */}
-                <Card className="lg:col-span-2">
-                    <CardHeader>
-                        <CardTitle className="text-lg flex items-center gap-2">
-                            <TrendingUp className="h-5 w-5 text-green-500" />
-                            تحليلات الحضور
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-6">
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="p-4 bg-orange-50 rounded-xl border border-orange-100">
-                                <p className="text-sm text-gray-600 mb-1">نسبة حضور الطالب</p>
-                                <div className="flex items-end gap-2">
-                                    <span className="text-3xl font-bold text-orange-600">{stats.rate.toFixed(1)}%</span>
-                                </div>
-                                <Progress value={stats.rate} className="h-2 mt-2" />
-                            </div>
-                            <div className="p-4 bg-gray-50 rounded-xl border border-gray-100">
-                                <p className="text-sm text-gray-600 mb-1">متوسط حضور الفصل</p>
-                                <div className="flex items-end gap-2">
-                                    <span className="text-3xl font-bold text-gray-700">{stats.classRate.toFixed(1)}%</span>
-                                </div>
-                                <Progress value={stats.classRate} className="h-2 mt-2" />
-                            </div>
-                        </div>
-
-                        <div className="flex items-center gap-2 p-3 bg-blue-50 text-blue-700 rounded-lg text-sm">
-                            <AlertTriangle className="h-4 w-4" />
-                            {stats.rate >= stats.classRate
-                                ? "أداء الطالب في الحضور أعلى من متوسط الفصل، أحسنت!"
-                                : "حضور الطالب أقل من متوسط الفصل، يرجى المتابعة."}
-                        </div>
-                    </CardContent>
-                </Card>
-            </div>
-
-            <Tabs defaultValue="attendance" className="w-full">
-                <TabsList className="grid w-full grid-cols-2 lg:w-[400px]">
-                    <TabsTrigger value="attendance" className="flex items-center gap-2">
-                        <Calendar className="h-4 w-4" />
-                        سجل الحضور
+            {/* 3. Main Content Tabs */}
+            <Tabs defaultValue="attendance" value={activeTab} onValueChange={setActiveTab} className="w-full">
+                <TabsList className="grid w-full grid-cols-3 mb-8 bg-white border p-1 h-auto">
+                    <TabsTrigger value="attendance" className="data-[state=active]:bg-orange-50 data-[state=active]:text-orange-700 py-2.5">
+                        <Calendar className="h-4 w-4 ml-2" />
+                        <span className="hidden md:inline">سجل</span> الحضور
                     </TabsTrigger>
-                    <TabsTrigger value="suspensions" className="flex items-center gap-2">
-                        <History className="h-4 w-4" />
-                        سجل القرارات ({suspensions.length})
+                    <TabsTrigger value="payments" className="data-[state=active]:bg-orange-50 data-[state=active]:text-orange-700 py-2.5">
+                        <CreditCard className="h-4 w-4 ml-2" />
+                        المالية
+                    </TabsTrigger>
+                    <TabsTrigger value="suspensions" className="data-[state=active]:bg-red-50 data-[state=active]:text-red-700 py-2.5">
+                        <History className="h-4 w-4 ml-2" />
+                        السلوك
                     </TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="attendance" className="mt-4">
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="text-md">آخر سجلات الحضور</CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead className="text-right">التاريخ</TableHead>
-                                        <TableHead className="text-right">الحالة</TableHead>
-                                        <TableHead className="text-right">وقت التسجيل</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {studentAttendance.length > 0 ? (
-                                        studentAttendance.slice(0, 10).map((record: Attendance) => (
-                                            <TableRow key={record.id}>
-                                                <TableCell>{record.date}</TableCell>
-                                                <TableCell>
-                                                    <Badge variant={record.present ? "default" : "destructive"}>
-                                                        {record.present ? "حاضر" : "غائب"}
-                                                    </Badge>
-                                                </TableCell>
-                                                <TableCell dir="ltr">{record.created_at ? format(new Date(record.created_at), 'hh:mm a') : '-'}</TableCell>
-                                            </TableRow>
-                                        ))
-                                    ) : (
-                                        <TableRow>
-                                            <TableCell colSpan={3} className="text-center text-gray-500 py-4">
-                                                لا توجد سجلات حضور حالياً
-                                            </TableCell>
-                                        </TableRow>
-                                    )}
-                                </TableBody>
-                            </Table>
-                        </CardContent>
-                    </Card>
+                <TabsContent value="attendance" className="animate-in fade-in-50 duration-300 slide-in-from-bottom-2">
+                    <AttendanceTab attendanceRecords={studentAttendance} stats={stats} studentClass={studentClass} />
                 </TabsContent>
 
-                <TabsContent value="suspensions" className="mt-4">
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="text-md">سجل الفصل من المدرسة</CardTitle>
-                            <CardDescription>عرض جميع قرارات الفصل السابقة والمدة والسبب</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead className="text-right">تاريخ البدء</TableHead>
-                                        <TableHead className="text-right">المدة (أيام)</TableHead>
-                                        <TableHead className="text-right">السبب</TableHead>
-                                        <TableHead className="text-right">تاريخ القرار</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {suspensions.length > 0 ? (
-                                        suspensions.map((s) => (
-                                            <TableRow key={s.id}>
-                                                <TableCell>{s.start_date}</TableCell>
-                                                <TableCell>{s.duration_days}</TableCell>
-                                                <TableCell className="max-w-[300px] truncate">{s.reason || '-'}</TableCell>
-                                                <TableCell dir="ltr">{format(new Date(s.created_at), 'yyyy-MM-dd')}</TableCell>
-                                            </TableRow>
-                                        ))
-                                    ) : (
-                                        <TableRow>
-                                            <TableCell colSpan={4} className="text-center text-gray-500 py-4">
-                                                لا يوجد سجل للفصل حالياً
-                                            </TableCell>
-                                        </TableRow>
-                                    )}
-                                </TableBody>
-                            </Table>
-                        </CardContent>
-                    </Card>
+                <TabsContent value="payments" className="mt-0">
+                    <PaymentsTab payments={studentPayments} />
+                </TabsContent>
+
+                <TabsContent value="suspensions">
+                    <SuspensionsTab suspensions={suspensions as any} isLoading={isSuspensionsLoading} />
                 </TabsContent>
             </Tabs>
 
-            {/* Suspend Dialog */}
+            {/* Quick Payment Dialog */}
+            <Dialog open={isPaymentDialogOpen} onOpenChange={setIsPaymentDialogOpen}>
+                <DialogContent className="sm:max-w-md" onInteractOutside={(e: any) => e.preventDefault()}>
+                    <DialogHeader>
+                        <DialogTitle>تسجيل دفعة مالية سريعة</DialogTitle>
+                        <DialogDescription>
+                            إضافة دفعة مالية جديدة للطالب {student.name}
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="grid gap-4 py-4">
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <Label htmlFor="amount">المبلغ *</Label>
+                                <Input
+                                    id="amount"
+                                    type="number"
+                                    value={paymentForm.amount}
+                                    onChange={(e) => setPaymentForm({ ...paymentForm, amount: parseFloat(e.target.value) })}
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="month">الشهر *</Label>
+                                <Input
+                                    id="month"
+                                    value={paymentForm.month}
+                                    onChange={(e) => setPaymentForm({ ...paymentForm, month: e.target.value })}
+                                />
+                            </div>
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="pay-notes">ملاحظات</Label>
+                            <Input
+                                id="pay-notes"
+                                value={paymentForm.notes}
+                                onChange={(e) => setPaymentForm({ ...paymentForm, notes: e.target.value })}
+                                placeholder="اختياري"
+                            />
+                        </div>
+                    </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setIsPaymentDialogOpen(false)}>إلغاء</Button>
+                        <Button onClick={handleAddPayment} className="bg-green-600 hover:bg-green-700 text-white">
+                            تأكيد الدفع
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* Edit Student Dialog */}
+            <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+                <DialogContent className="sm:max-w-[30%] w-full" onInteractOutside={(e: any) => e.preventDefault()}>
+                    <DialogHeader>
+                        <DialogTitle>تعديل بيانات الطالب</DialogTitle>
+                        <DialogDescription>
+                            قم بتعديل بيانات الطالب
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="grid gap-4 py-4">
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <Label htmlFor="edit-name">اسم الطالب *</Label>
+                                <Input
+                                    id="edit-name"
+                                    value={formData.name}
+                                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="edit-phone">رقم الهاتف *</Label>
+                                <Input
+                                    id="edit-phone"
+                                    value={formData.phone}
+                                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                                    dir="ltr"
+                                />
+                            </div>
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="edit-email">البريد الإلكتروني</Label>
+                            <Input
+                                id="edit-email"
+                                type="email"
+                                value={formData.email}
+                                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                                dir="ltr"
+                            />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <Label htmlFor="edit-guardianName">اسم ولي الأمر *</Label>
+                                <Input
+                                    id="edit-guardianName"
+                                    value={formData.guardian_name}
+                                    onChange={(e) => setFormData({ ...formData, guardian_name: e.target.value })}
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="edit-guardianPhone">هاتف ولي الأمر *</Label>
+                                <Input
+                                    id="edit-guardianPhone"
+                                    value={formData.guardian_phone}
+                                    onChange={(e) => setFormData({ ...formData, guardian_phone: e.target.value })}
+                                    dir="ltr"
+                                />
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <Label htmlFor="edit-paymentStatus">حالة الرسوم</Label>
+                                <Select
+                                    value={formData.payment_status}
+                                    onValueChange={(value: 'regular' | 'exempt') => setFormData({ ...formData, payment_status: value })}
+                                >
+                                    <SelectTrigger id="edit-paymentStatus">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="regular">منتظم</SelectItem>
+                                        <SelectItem value="exempt">معفى</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="edit-class">الفصل</Label>
+                                <Select
+                                    value={formData.class_id}
+                                    onValueChange={(value) => setFormData({ ...formData, class_id: value })}
+                                >
+                                    <SelectTrigger id="edit-class">
+                                        <SelectValue placeholder="اختر الفصل" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {classes.map((cls: Class) => (
+                                            <SelectItem key={cls.id} value={cls.id || ''}>
+                                                {cls.name} ({cls.grade_level})
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        </div>
+                    </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>إلغاء</Button>
+                        <Button onClick={handleEditStudent} className="bg-orange-500 hover:bg-orange-600 text-black">
+                            حفظ التغييرات
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* Suspend Dialog - Kept functional */}
             <Dialog open={isSuspendDialogOpen} onOpenChange={setIsSuspendDialogOpen}>
                 <DialogContent className="sm:max-w-[425px]" onInteractOutside={(e: any) => e.preventDefault()}>
                     <DialogHeader>
@@ -412,11 +494,13 @@ export default function StudentProfile() {
                                 value={suspensionForm.status}
                                 onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSuspensionForm({ ...suspensionForm, status: e.target.value as any })}
                             >
-                                <option value="suspended">وقف مؤقت (Suspension)</option>
+                                <option value="warning">تحذير (Warning)</option>
+                                <option value="parent_notification">تنبيه ولي الأمر (Parent Notification)</option>
+                                <option value="suspension">وقف مؤقت (Suspension)</option>
                                 <option value="expelled">فصل نهائي (Expulsion)</option>
                             </select>
                         </div>
-                        {suspensionForm.status === 'suspended' && (
+                        {suspensionForm.status === 'suspension' && (
                             <div className="space-y-2">
                                 <Label htmlFor="duration">مدة الوقف (بالأيام) *</Label>
                                 <Input
@@ -443,8 +527,7 @@ export default function StudentProfile() {
                         <Button variant="outline" onClick={() => setIsSuspendDialogOpen(false)}>إلغاء</Button>
                         <Button
                             onClick={handleSuspend}
-                            disabled={!suspensionForm.reason}
-                            className={`${suspensionForm.status === 'expelled' ? 'bg-red-600 hover:bg-red-700' : 'bg-orange-600 hover:bg-orange-700'} text-white`}
+                            className="bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 px-6 rounded-md shadow-md transition-all duration-200"
                         >
                             تأكيد وحفظ الإجراء
                         </Button>
